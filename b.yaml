@@ -1,0 +1,52 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: test-jmeter-deployment
+  namespace: bankingservices-sit
+spec:
+  replicas: 1  # This specifies how many instances (pods) to run
+  selector:
+    matchLabels:
+      app: jmeter
+  template:
+    metadata:
+      labels:
+        app: jmeter
+    spec:
+      serviceAccountName: bankingservices-sa
+      imagePullSecrets:
+        - name: nexus
+      containers:
+        - name: jmeter
+          image: sahabimgrepo.emiratesnbd.com:5000/git-jm-v1.2:v1
+          command:
+            - /bin/sh
+            - '-c'
+          args:
+            - |
+              timestamp=$(date +%Y%m%d%H%M%S) && \
+              echo "Pod name is: $HOSTNAME" && \
+              git clone -b Development git@github.emiratesnbd.com:BankingServices/Jmeter-POC.git && \
+              ls -lart /opt/apache-jmeter-5.5/Jmeter-POC/NodeJS_18_E_Notification_v3_1_5_X_F3_50TPS_24Oct2.jmx && \
+              cp '/opt/apache-jmeter-5.5/Jmeter-POC/NodeJS_18_E_Notification_v3_1_5_X_F3_50TPS_24Oct2.jmx' /opt/apache-jmeter-5.5/ && \
+              ls -lart /opt/apache-jmeter-5.5/ && \
+              chmod 777 /opt/apache-jmeter-5.5/NodeJS_18_E_Notification_v3_1_5_X_F3_50TPS_24Oct2.jmx && \
+              jmeter -n -t NodeJS_18_E_Notification_v3_1_5_X_F3_50TPS_24Oct2.jmx \
+              -l /tmpfs/results_${timestamp}_$HOSTNAME.jtl \
+              -j /tmpfs/results_${timestamp}_$HOSTNAME.log && \
+              sleep 300
+          resources:
+            limits:
+              cpu: '2'
+              memory: 1300Mi
+            requests:
+              cpu: 10m
+              memory: 1300Mi
+          volumeMounts:
+            - name: jmeter-pvc
+              mountPath: /tmpfs
+      volumes:
+        - name: jmeter-pvc
+          persistentVolumeClaim:
+            claimName: jmeter-pvc
+      restartPolicy: Never  # Optional in Deployments; limits restarts if needed
