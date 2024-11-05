@@ -1,0 +1,111 @@
+For this scenario, you can use a combination of:
+
+External Coordination with a ConfigMap or Database: Track the completion status of each test pod externally, such as in a ConfigMap or a lightweight database. This way, the state persists even if pods restart or scale.
+Job Controller Pattern: While sticking with Deployment, you can still track the overall progress to decide on scaling down once all pods complete their test runs.
+Centralized Cleanup Trigger: Once all pods have run the test, a final cleanup script or process can handle scaling down the deployment.
+Here's an approach with these ideas:
+
+1. Track Pod Completion with a ConfigMap
+Each pod updates its status in a shared ConfigMap once it completes the test. If it has already run in a prior instance, it can exit immediately without re-running the test.
+
+Step 1: ConfigMap Initialization
+
+First, create a ConfigMap to store pod statuses:
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: jmeter-test-status
+  namespace: bankingservices-sit
+data:
+  pod-status: "{}"  # Initial empty JSON; pods will add entries here
+
+Step 2: Update Deployment YAML
+
+Modify your Deployment to:
+
+Check the ConfigMap before running the test.
+Update the ConfigMap upon completion.
+Exit if the test has already been recorded as completed for that pod.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: test-jmeter-deployment
+  namespace: bankingservices-sit
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: jmeter
+  template:
+    metadata:
+      labels:
+        app: jmeter
+    spec:
+      serviceAccountName: bankingservices-sa
+      imagePullSecrets:
+        - name: nexus
+      containers:
+        - name: jmeter
+          image: sahabimgrepo.emiratesnbd.com:5000/git-jm-v1.2:v1
+          command:
+            - /bin/sh
+            - '-c'
+          args:
+            - |
+              pod_name=$(echo $HOSTNAME) && \
+              status=$(kubectl get configmap jmeter-test-status -o jsonpath="{.data.pod-status}" | jq -r ".${pod_name}") && \
+              if [ "$status" = "completed" ]; then
+                echo "Test already completed for pod $pod_name. Exiting."
+                exit 0
+              fi
+              echo "Starting JMeter test for pod $pod_name" && \
+              timestamp=$(date +%Y%m%d%H%M%S) && \
+              git clone -b Development git@github.emiratesnbd.com:BankingServices/Jmeter-POC.git && \
+              cp '/opt/apache-jmeter-5.5/Jmeter-POC/NodeJS_18_E_Notification_v3_1_5_X_F3_50TPS_24Oct2.jmx' /opt/apache-jmeter-5.5/ && \
+              chmod 777 /opt/apache-jmeter-5.5/NodeJS_18_E_Notification_v3_1_5_X_F3_50TPS_24Oct2.jmx && \
+              jmeter -n -t NodeJS_18_E_Notification_v3_1_5_X_F3_50TPS_24Oct2.jmx \
+              -l /tmpfs/results_${timestamp}_$HOSTNAME.jtl \
+              -j /tmpfs/results_${timestamp}_$HOSTNAME.log && \
+              kubectl patch configmap jmeter-test-status -p "{\"data\": {\"pod-status\": \"$(kubectl get configmap jmeter-test-status -o jsonpath='{.data.pod-status}' | jq -r ". + {\"${pod_name}\": \"completed\"}")\"}}" && \
+              echo "Test completed for pod $pod_name. Marked as completed." && \
+              sleep 300 && \
+              exit 0
+          resources:
+            limits:
+              cpu: '2'
+              memory: 1300Mi
+            requests:
+              cpu: 10m
+              memory: 1300Mi
+          volumeMounts:
+            - name: jmeter-pvc
+              mountPath: /tmpfs
+      volumes:
+        - name: jmeter-pvc
+          persistentVolumeClaim:
+            claimName: jmeter-pvc
+
+3. Centralized Cleanup Script
+Create a small script or Kubernetes CronJob that periodically checks the jmeter-test-status ConfigMap. Once all pods are marked as completed, it can scale down the deployment.
+
+Here’s an example script you could use in a CronJob or manually run to perform the cleanup:
+
+#!/bin/bash
+COMPLETED_COUNT=$(kubectl get configmap jmeter-test-status -o jsonpath="{.data.pod-status}" | jq 'to_entries | map(select(.value == "completed")) | length')
+TOTAL_PODS=$(kubectl get deployment test-jmeter-deployment -o jsonpath="{.spec.replicas}")
+
+if [ "$COMPLETED_COUNT" -ge "$TOTAL_PODS" ]; then
+  echo "All pods have completed the test. Scaling down deployment."
+  kubectl scale deployment test-jmeter-deployment --replicas=0
+else
+  echo "Not all pods have completed the test yet."
+fi
+
+This approach will:
+
+Track which pods have completed their tests, allowing new pods to skip re-running if they restart.
+Let you scale down the deployment once all pods have finished, achieving a coordinated cleanup without needing a Job controller.
+This setup ensures efficient utilization and cleanup with minimal manual intervention.
+
