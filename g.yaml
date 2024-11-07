@@ -1,0 +1,21 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: scale-down-jmeter
+  namespace: bankingservices-sit
+spec:
+  template:
+    spec:
+      containers:
+        - name: scale-down
+          image: 'openshift/origin-cli'  # Image with oc/kubectl installed
+          command:
+            - /bin/sh
+            - '-c'
+          args:
+            - |
+              echo "Waiting for 1 hour..." && \
+              sleep 3600 && \
+              echo "Scaling down JMeter deployment to zero replicas..." && \
+              oc scale deployment/test-jmeter-deployment --replicas=0 -n bankingservices-sit
+      restartPolicy: Never
