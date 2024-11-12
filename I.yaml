@@ -139,3 +139,37 @@ objects:
                   echo "Scaling down JMeter deployment to zero replicas..." && \
                   oc scale deployment/test-jmeter-deployment --replicas=0 -n ${NAMESPACE}
           restartPolicy: Never
+pipeline {
+    agent any
+    environment {
+        NAMESPACE = 'bankingservices-sit'
+        IMAGE = 'sahabimgrepo.emiratesnbd.com:5000/git-jm-v1.2:v1'
+        PVC_NAME = 'jmeter-pvc'
+    }
+    stages {
+        stage('Checkout YAML Files') {
+            steps {
+                git branch: 'main', url: 'https://your.repo.url/repository.git'
+            }
+        }
+
+        stage('Process and Apply Deployment Template') {
+            steps {
+                script {
+                    sh "oc process -f deployment-template.yaml -p NAMESPACE=${NAMESPACE} -p IMAGE=${IMAGE} -p PVC_NAME=${PVC_NAME} | oc apply -f -"
+                }
+            }
+        }
+    }
+    post {
+        always {
+            echo 'Pipeline completed.'
+        }
+        success {
+            echo 'Templates processed and applied successfully!'
+        }
+        failure {
+            echo 'There was an issue processing the templates.'
+        }
+    }
+}
