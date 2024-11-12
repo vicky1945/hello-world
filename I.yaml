@@ -173,3 +173,33 @@ pipeline {
         }
     }
 }
+stage('Creation') {
+            agent { label populate_utils.get_agent_name(ENV_ENVTYPE) }
+            steps {
+                script {
+                    println "Starting Creation Stage"
+                    git branch: 'cronjob-test', credentialsId: 'git', url: 'git@github.emiratesnbd.com:Devops/PipelineAsCodeV4.git'
+                    def cronJobs = new groovy.json.JsonSlurper().parseText(CRON_LIST).collect { it as HashMap }
+                    cronJobs.each { job ->
+                        def namespace = env.BRANCH_NAME == 'master' ? job.NAMESPACE : "${job.NAMESPACE}-${job.ENV}"
+                        sh "oc project '${namespace.replaceAll(/'/, '\\\\\'')}'"
+                        println "Namespace: ${namespace}"
+                        def NAMESPACES = job.NAMESPACE
+                        def IMAGE = sh(returnStdout: true, script: "oc get deploymentconfig '${job.CONTAINER_NAME.replaceAll(/'/, '\\\\\'')}' -n '${namespace.replaceAll(/'/, '\\\\\'')}' -o jsonpath='{.spec.template.spec.containers[*].image}'")
+                        println "Image: ${IMAGE}"
+                        sh """
+                        oc process -p IMAGE='${IMAGE.replaceAll(/'/, '\\\\\'')}' \
+                        COMMAND1='${job.COMMAND1.replaceAll(/'/, '\\\\\'')}' \
+                        COMMAND2='${job.COMMAND2.replaceAll(/'/, '\\\\\'')}' \
+                        CONCURRENCYPOLICY='${job.CONCURRENCYPOLICY.replaceAll(/'/, '\\\\\'')}' \
+                        CRONJOB_NAME='${job.CRONJOB_NAME.replaceAll(/'/, '\\\\\'')}' \
+                        SCHEDULE='${job.SCHEDULE.replaceAll(/'/, '\\\\\'')}' \
+                        RESTARTPOLICY='${job.RESTARTPOLICY.replaceAll(/'/, '\\\\\'')}' \
+                        NAMESPACES='${job.NAMESPACE.replaceAll(/'/, '\\\\\'')}' \
+                        CONTAINER_NAME='${job.CONTAINER_NAME.replaceAll(/'/, '\\\\\'')}' \
+                        -f ./Jenkinsfile-Folder/crontemplate.yaml | oc apply -f - -n '${namespace.replaceAll(/'/, '\\\\\'')}'
+                        """
+                    }
+                }
+            }
+        }
