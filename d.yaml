@@ -4,7 +4,7 @@ metadata:
   name: test-jmeter-deployment
   namespace: bankingservices-sit
 spec:
-  replicas: 1  # Initial replica count; HPA will manage scaling
+  replicas: 1
   selector:
     matchLabels:
       app: jmeter
@@ -12,8 +12,6 @@ spec:
     metadata:
       labels:
         app: jmeter
-      annotations:
-        test-status: "not-started"  # Track if test has run
     spec:
       serviceAccountName: bankingservices-sa
       imagePullSecrets:
@@ -26,23 +24,17 @@ spec:
             - '-c'
           args:
             - |
-              if [ "$(cat /etc/podinfo/test-status)" = "completed" ]; then
-                echo "Test already completed for pod $HOSTNAME. Exiting."
-                exit 0
-              else
-                echo "Starting JMeter test" && \
-                timestamp=$(date +%Y%m%d%H%M%S) && \
-                git clone -b Development git@github.emiratesnbd.com:BankingServices/Jmeter-POC.git && \
-                cp '/opt/apache-jmeter-5.5/Jmeter-POC/NodeJS_18_E_Notification_v3_1_5_X_F3_50TPS_24Oct2.jmx' /opt/apache-jmeter-5.5/ && \
-                chmod 777 /opt/apache-jmeter-5.5/NodeJS_18_E_Notification_v3_1_5_X_F3_50TPS_24Oct2.jmx && \
-                jmeter -n -t NodeJS_18_E_Notification_v3_1_5_X_F3_50TPS_24Oct2.jmx \
-                -l /tmpfs/results_${timestamp}_$HOSTNAME.jtl \
-                -j /tmpfs/results_${timestamp}_$HOSTNAME.log && \
-                echo "JMeter test completed for pod $HOSTNAME, setting status to completed" && \
-                echo "completed" > /etc/podinfo/test-status && \
-                sleep 300 && \
-                exit 0  # Exit after wait period to prevent restart
-              fi
+              timestamp=$(date +%Y%m%d%H%M%S) && \
+              echo "Pod name is: $HOSTNAME" && \
+              git clone -b Development git@github.emiratesnbd.com:BankingServices/Jmeter-POC.git && \
+              ls -lart /opt/apache-jmeter-5.5/Jmeter-POC/NodeJS_18_E_Notification_v3_1_5_X_F3_50TPS_24Oct2.jmx && \
+              cp '/opt/apache-jmeter-5.5/Jmeter-POC/NodeJS_18_E_Notification_v3_1_5_X_F3_50TPS_24Oct2.jmx' /opt/apache-jmeter-5.5/ && \
+              ls -lart /opt/apache-jmeter-5.5/ && \
+              chmod 777 /opt/apache-jmeter-5.5/NodeJS_18_E_Notification_v3_1_5_X_F3_50TPS_24Oct2.jmx && \
+              jmeter -n -t NodeJS_18_E_Notification_v3_1_5_X_F3_50TPS_24Oct2.jmx \
+              -l /tmpfs/results_${timestamp}_$HOSTNAME.jtl \
+              -j /tmpfs/results_${timestamp}_$HOSTNAME.log && \
+              sleep 300
           resources:
             limits:
               cpu: '2'
@@ -53,20 +45,8 @@ spec:
           volumeMounts:
             - name: jmeter-pvc
               mountPath: /tmpfs
-            - name: pod-info
-              mountPath: /etc/podinfo
-              readOnly: false
       volumes:
         - name: jmeter-pvc
           persistentVolumeClaim:
             claimName: jmeter-pvc
-        - name: pod-info
-          emptyDir: {}  # Temporarily stores test status for each pod
-      lifecycle:
-        preStop:
-          exec:
-            command:
-              - /bin/sh
-              - '-c'
-              - |
-                echo "Gracefully stopping JMeter pod $HOSTNAME"
+      restartPolicy: Always
