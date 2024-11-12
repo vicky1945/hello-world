@@ -1,0 +1,52 @@
+pipeline {
+    agent any
+    environment {
+        NAMESPACE = 'bankingservices-sit'  // OpenShift namespace
+    }
+    stages {
+        stage('Checkout YAML Files') {
+            steps {
+                // Clone the repository with YAML files
+                git branch: 'main', url: 'https://your.repo.url/repository.git'
+            }
+        }
+
+        stage('Process and Apply Deployment YAML') {
+            steps {
+                script {
+                    // Process the JMeter deployment YAML and apply to OpenShift
+                    sh 'oc process -f deployment.yaml -n $NAMESPACE | oc apply -f -'
+                }
+            }
+        }
+
+        stage('Process and Apply HPA YAML') {
+            steps {
+                script {
+                    // Process the Horizontal Pod Autoscaler YAML and apply to OpenShift
+                    sh 'oc process -f hpa.yaml -n $NAMESPACE | oc apply -f -'
+                }
+            }
+        }
+
+        stage('Process and Apply Scale-Down Job YAML') {
+            steps {
+                script {
+                    // Process the Job YAML for scale-down and apply to OpenShift
+                    sh 'oc process -f scale-down-job.yaml -n $NAMESPACE | oc apply -f -'
+                }
+            }
+        }
+    }
+    post {
+        always {
+            echo 'Pipeline completed.'
+        }
+        success {
+            echo 'Deployment and HPA applied successfully!'
+        }
+        failure {
+            echo 'There was an issue applying YAML files.'
+        }
+    }
+}
