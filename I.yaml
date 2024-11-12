@@ -1,0 +1,141 @@
+apiVersion: template.openshift.io/v1
+kind: Template
+metadata:
+  name: jmeter-deployment-template
+parameters:
+  - name: NAMESPACE
+    description: The namespace where the deployment will be created
+    required: true
+  - name: IMAGE
+    description: JMeter Docker image to be used
+    required: true
+    value: sahabimgrepo.emiratesnbd.com:5000/git-jm-v1.2:v1
+  - name: PVC_NAME
+    description: Name of the PersistentVolumeClaim to be used
+    required: true
+    value: jmeter-pvc
+
+objects:
+  - apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: test-jmeter-deployment
+      namespace: ${NAMESPACE}
+    spec:
+      replicas: 1
+      selector:
+        matchLabels:
+          app: jmeter
+      template:
+        metadata:
+          labels:
+            app: jmeter
+        spec:
+          serviceAccountName: bankingservices-sa
+          imagePullSecrets:
+            - name: nexus
+          containers:
+            - name: jmeter
+              image: ${IMAGE}
+              command:
+                - /bin/sh
+                - '-c'
+              args:
+                - |
+                  timestamp=$(date +%Y%m%d%H%M%S) && \
+                  echo "Pod name is: $HOSTNAME" && \
+                  git clone -b Development git@github.emiratesnbd.com:BankingServices/Jmeter-POC.git && \
+                  ls -lart /opt/apache-jmeter-5.5/Jmeter-POC/NodeJS_18_E_Notification_v3_1_5_X_F3_50TPS_24Oct2.jmx && \
+                  cp '/opt/apache-jmeter-5.5/Jmeter-POC/NodeJS_18_E_Notification_v3_1_5_X_F3_50TPS_24Oct2.jmx' /opt/apache-jmeter-5.5/ && \
+                  ls -lart /opt/apache-jmeter-5.5/ && \
+                  chmod 777 /opt/apache-jmeter-5.5/NodeJS_18_E_Notification_v3_1_5_X_F3_50TPS_24Oct2.jmx && \
+                  jmeter -n -t NodeJS_18_E_Notification_v3_1_5_X_F3_50TPS_24Oct2.jmx \
+                  -l /tmpfs/results_${timestamp}_$HOSTNAME.jtl \
+                  -j /tmpfs/results_${timestamp}_$HOSTNAME.log && \
+                  sleep 300
+              resources:
+                limits:
+                  cpu: '2'
+                  memory: 1300Mi
+                requests:
+                  cpu: 10m
+                  memory: 1300Mi
+              volumeMounts:
+                - name: jmeter-pvc
+                  mountPath: /tmpfs
+          volumes:
+            - name: jmeter-pvc
+              persistentVolumeClaim:
+                claimName: ${PVC_NAME}
+          restartPolicy: Always
+
+
+apiVersion: template.openshift.io/v1
+kind: Template
+metadata:
+  name: jmeter-hpa-template
+parameters:
+  - name: NAMESPACE
+    description: Namespace where the application is deployed
+    required: true
+  - name: MIN_REPLICAS
+    description: Minimum number of replicas for the HPA
+    required: true
+    value: "1"
+  - name: MAX_REPLICAS
+    description: Maximum number of replicas for the HPA
+    required: true
+    value: "10"
+
+objects:
+  - apiVersion: autoscaling/v2
+    kind: HorizontalPodAutoscaler
+    metadata:
+      name: jmeter-deployment-autoscaler
+      namespace: ${NAMESPACE}
+    spec:
+      scaleTargetRef:
+        apiVersion: apps/v1
+        kind: Deployment
+        name: test-jmeter-deployment
+      minReplicas: ${MIN_REPLICAS}
+      maxReplicas: ${MAX_REPLICAS}
+      metrics:
+        - type: Resource
+          resource:
+            name: cpu
+            target:
+              type: Utilization
+              averageUtilization: 70
+
+apiVersion: template.openshift.io/v1
+kind: Template
+metadata:
+  name: scale-down-job-template
+parameters:
+  - name: NAMESPACE
+    description: Namespace where the application is deployed
+    required: true
+
+objects:
+  - apiVersion: batch/v1
+    kind: Job
+    metadata:
+      name: scale-down-jmeter
+      namespace: ${NAMESPACE}
+    spec:
+      template:
+        spec:
+          containers:
+            - name: scale-down
+              image: 'openshift/origin-cli'
+              command:
+                - /bin/sh
+                - '-c'
+              args:
+                - |
+                  echo "Waiting for 1 hour..." && \
+                  sleep 3600 && \
+                  echo "Scaling down JMeter deployment to zero replicas..." && \
+                  oc scale deployment/test-jmeter-deployment --replicas=0 -n ${NAMESPACE}
+          restartPolicy: Never
