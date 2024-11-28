@@ -1,53 +1,95 @@
-
-apiVersion: batch/v1
-kind: Job
+apiVersion: template.openshift.io/v1
+kind: Template
 metadata:
-  name: test-jmeter
+  name: jmeter-job-template
   namespace: bankingservices-sit
-spec:
-  parallelism: 1
-  completions: 1
-  selector: {}
-  template:
+parameters:
+  - name: JOB_NAME
+    description: Name of the Job
+    value: test-jmeter
+  - name: IMAGE_NAME
+    description: Fully qualified image name for the JMeter container
+    value: sahabimgrepo.emiratesnbd.com:5000/git-jm-v1.2:v1
+  - name: SERVICE_ACCOUNT_NAME
+    description: Service account for the Job
+    value: bankingservices-sa
+  - name: GIT_REPO_URL
+    description: Git repository URL
+    value: git@github.emiratesnbd.com:BankingServices/Jmeter-POC.git
+  - name: GIT_BRANCH
+    description: Git branch to clone
+    value: Development
+  - name: JMETER_TEST_FILE
+    description: Path to the JMeter test file in the repository
+    value: NodeJS_18_E_Notification_v3_1_5_X_F3_50TPS_24Oct2.jmx
+  - name: PVC_NAME
+    description: PersistentVolumeClaim name for storing results
+    value: jmeter-pvc
+  - name: PARALLELISM
+    description: Number of pods to run in parallel
+    value: '1'
+  - name: COMPLETIONS
+    description: Total number of Job completions
+    value: '1'
+  - name: CPU_LIMIT
+    description: CPU limit for the container
+    value: '2'
+  - name: MEMORY_LIMIT
+    description: Memory limit for the container
+    value: 1300Mi
+  - name: CPU_REQUEST
+    description: CPU request for the container
+    value: 10m
+  - name: MEMORY_REQUEST
+    description: Memory request for the container
+    value: 1300Mi
+
+objects:
+  - apiVersion: batch/v1
+    kind: Job
     metadata:
-      name: jmeter
+      name: "${JOB_NAME}"
     spec:
-      ttlSecondsAfterFinished: 30
-      serviceAccountName: bankingservices-sa
-      securityContext: {}
-      imagePullSecrets:
-        - name: nexus
-      containers:
-        - name: jmeter
-          image: sahabimgrepo.emiratesnbd.com:5000/git-jm-v1.2:v1
-          command:
-            - /bin/sh
-            - '-c'
-          args:
-            - |
-              timestamp=$(date +%Y%m%d%H%M%S) && \
-              echo "Pod name is: $HOSTNAME"
-              git clone -b Development git@github.emiratesnbd.com:BankingServices/Jmeter-POC.git && \
-			  ls -lart /opt/apache-jmeter-5.5/Jmeter-POC/NodeJS_18_E_Notification_v3_1_5_X_F3_50TPS_24Oct2.jmx && \
-              cp '/opt/apache-jmeter-5.5/Jmeter-POC/NodeJS_18_E_Notification_v3_1_5_X_F3_50TPS_24Oct2.jmx' /opt/apache-jmeter-5.5/ && \
-			  ls -lart /opt/apache-jmeter-5.5/ && \
-              chmod 777 /opt/apache-jmeter-5.5/NodeJS_18_E_Notification_v3_1_5_X_F3_50TPS_24Oct2.jmx && \
-              jmeter -n -t NodeJS_18_E_Notification_v3_1_5_X_F3_50TPS_24Oct2.jmx \
-              -l /tmpfs/results_${timestamp}_$HOSTNAME.jtl \
-              -j /tmpfs/results_${timestamp}_$HOSTNAME.log
-              sleep 300
-          resources:
-            limits:
-              cpu: '2'
-              memory: 1300Mi
-            requests:
-              cpu: 10m
-              memory: 1300Mi
-          volumeMounts:
-          - name: jmeter-pvc
-            mountPath: /tmpfs
-      restartPolicy: Never
-      volumes:
-        - name: jmeter-pvc
-          persistentVolumeClaim:
-            claimName: jmeter-pvc
+      parallelism: "${PARALLELISM}"
+      completions: "${COMPLETIONS}"
+      template:
+        metadata:
+          name: jmeter
+        spec:
+          ttlSecondsAfterFinished: 300
+          serviceAccountName: "${SERVICE_ACCOUNT_NAME}"
+          imagePullSecrets:
+            - name: nexus
+          containers:
+            - name: jmeter
+              image: "${IMAGE_NAME}"
+              command:
+                - /bin/sh
+                - '-c'
+              args:
+                - |
+                  timestamp=$(date +%Y%m%d%H%M%S) && \
+                  echo "Pod name is: $HOSTNAME" && \
+                  git clone -b ${GIT_BRANCH} ${GIT_REPO_URL} || { echo "Git clone failed"; exit 1; } && \
+                  ls -lart /opt/apache-jmeter-5.5/Jmeter-POC/${JMETER_TEST_FILE} || { echo "Test file not found"; exit 1; } && \
+                  cp "/opt/apache-jmeter-5.5/Jmeter-POC/${JMETER_TEST_FILE}" /opt/apache-jmeter-5.5/ && \
+                  chmod 777 /opt/apache-jmeter-5.5/${JMETER_TEST_FILE} && \
+                  jmeter -n -t ${JMETER_TEST_FILE} \
+                  -l /tmpfs/results_${timestamp}_$HOSTNAME.jtl \
+                  -j /tmpfs/results_${timestamp}_$HOSTNAME.log || { echo "JMeter execution failed"; exit 1; } && \
+                  echo "Test run completed successfully"
+              resources:
+                limits:
+                  cpu: "${CPU_LIMIT}"
+                  memory: "${MEMORY_LIMIT}"
+                requests:
+                  cpu: "${CPU_REQUEST}"
+                  memory: "${MEMORY_REQUEST}"
+              volumeMounts:
+                - name: jmeter-pvc
+                  mountPath: /tmpfs
+          restartPolicy: Never
+          volumes:
+            - name: jmeter-pvc
+              persistentVolumeClaim:
+                claimName: "${PVC_NAME}"
