@@ -1,0 +1,17 @@
+node { 
+        ENV_ENVTYPE = "pt"
+        PARALLELISM = '5'
+        COMPLETIONS = '5'
+        JMX_FILENAME = "NodeJS_18_E_Notification_v3_1_5_X_F3_50TPS_24Oct2.jmx"
+        ENV_APPLICATION_NAME = "notificationcorev4"
+        CPU_LIMIT = '2'
+        MEMORY_LIMIT = "1300Mi"
+        CPU_REQUEST = "10m"
+        MEMORY_REQUEST = "1500Mi"
+        GIT_REPO_URL = "git@github.emiratesnbd.com:BankingServices/Jmeter-POC.git"
+        GIT_BRANCH = "Development"
+        ENV_NAMESPACE = "bankingservices-sit"
+    
+   checkout([$class: 'GitSCM', branches: [[name: '*/JMeter-Testing']], userRemoteConfigs: [[credentialsId: 'git', url: 'git@github.emiratesnbd.com:Devops/PipelineAsCodeV4.git']]])
+   load 'JMeterJenkinsFile'
+}      
