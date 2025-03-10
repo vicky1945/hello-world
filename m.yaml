@@ -1,0 +1,265 @@
+library 'v4-enbd-shared-library'
+import groovy.json.JsonSlurperClassic
+pipeline{
+    agent any
+    environment{
+        GIT_TOKEN = credentials('gittoken')
+        REMEDY_PASSWORD = credentials("remedypassword")
+        GIT_SSH_URL = "git@github.emiratesnbd.com"
+        OWNER_NAME = "${ENV_NAMESPACE}Charts"
+        ENV_APPLICATION_LIST = "$ENV_APPLICATION_LIST".trim()
+        ENV_NAMESPACE = "$ENV_NAMESPACE".trim()
+        ENTITY_NAME = "$ENTITY_NAME".trim()
+        ENV_ENVTYPE = "$ENV_ENVTYPE".trim()
+        REPLICA_COUNT = "$REPLICA_COUNT".trim()
+        MIN_REPLICA = "$MIN_REPLICA".trim()
+        MAX_REPLICA = "$MAX_REPLICA".trim()
+        CPU_PERCENT = "$CPU_PERCENT".trim()
+        ACTIVITY = "$ACTIVITY".trim()
+        CR_NUMBER = "$CR_NUMBER".trim()
+        POD_NAMES = "$POD_NAMES".trim()
+        GIT_API_URL = "https://github.emiratesnbd.com/api/v3"
+        GIT_URL = "${scm.userRemoteConfigs[0].url}"
+        SERVICE_NAME = repo_utils.serviceName("${GIT_URL}")
+        ORG_NAME =  repo_utils.orgName("${GIT_URL}")
+        PAAS_TEAM = "FebinJ@emiratesnbd.com"
+        BUILD_TRIGGER_BY = "febinj@emiratesnbd.com"
+
+    }
+    stages{
+        stage("Input Validation") {
+            steps {
+                script {
+                    if (ENV_NAMESPACE == "") {
+                        error("Namespace is Mandatory !!")
+                        }else {
+                            echo "Namespace $ENV_NAMESPACE provided"
+                        }
+                    if (ENTITY_NAME == "") {
+                        error("Entity Name is Mandatory !!")
+                    }else {
+                        if(ENTITY_NAME != "ksa" && ENTITY_NAME != "uae"){
+                            error("Entity Name must be either ksa or uae !!")
+                        }
+                    }
+                    if (ENV_ENVTYPE == "") {
+                        error("Environment is Mandatory !!")
+                    }else {
+                        UAE_ENVIRONMENT = ["dev", "sit", "uat", "pt","cte", "prod", "dr"]
+                        KSA_ENVIRONMENT = ["dev", "sit", "uat", "stg", "prod", "dr"]
+                        if(ENTITY_NAME == "uae"){
+                            if(!UAE_ENVIRONMENT.contains(ENV_ENVTYPE)){
+                                error("Environment $ENV_ENVTYPE is not valid for $ENTITY_NAME Entity !!")
+                            }
+                        }else {
+                            if(!KSA_ENVIRONMENT.contains(ENV_ENVTYPE)){
+                                error("Environment $ENV_ENVTYPE is not valid for $ENTITY_NAME Entity !!")
+                            }
+                        }
+                        if((ENV_ENVTYPE == "stg" || ENV_ENVTYPE == "prod" || ENV_ENVTYPE == "dr") && BRANCH_NAME == "master") {
+                            if(CR_NUMBER == ""){
+                                error("CR Number is Mandatory for $ENV_ENVTYPE Environment !!")
+                            }else {
+                                println "Proceeding for CR Validation"
+                                CR_INC_REGEX = /^(CRQ|INC)(\d*)$/
+                                CR_NUMBER = CR_NUMBER.trim()
+                                CURRENT_TIME = sh(returnStdout: true, script: "date +%Y-%m-%dT%H:%M:%S.000").trim()
+                                if(CR_NUMBER.matches(CR_INC_REGEX)) {
+                                    println "Format Validation Done!! Proceeding for Validation from Backend"
+                                }else{
+                                    error("CR Or Incident Number $CR_NUMBER is either Blank or not in proper Format !! Please correct the format")
+                                }
+                                CrValidationResult = change_release_utils.validate_CR("prod", CR_NUMBER, CURRENT_TIME)
+                            }
+                        }else if((ENV_ENVTYPE == "dev" || ENV_ENVTYPE == "sit" || ENV_ENVTYPE == "uat" || ENV_ENVTYPE == "pt" || ENV_ENVTYPE == "cte") && BRANCH_NAME == "non-prod"){
+                            println "CR Validation is not required for $ENV_ENVTYPE Environment"
+                        }else {
+                            error("Branch $BRANCH_NAME and Environment $ENV_ENVTYPE Combination is not valid !!")
+                        }
+                    }
+                    if (ACTIVITY == "") {
+                        error("Activity is Mandatory !!")
+                    }else {
+                        if(ACTIVITY != "scaleup" && ACTIVITY != "scaledown" && ACTIVITY != "restart" && ACTIVITY != "autoscale"){
+                            error("Activity must be either scaleup or scaledown or restart or autoscale !!")
+                        }
+                        if(ACTIVITY == "scaleup"){
+                            if(REPLICA_COUNT == ""){
+                                error("Replica Count is Mandatory for scaleup Activity !!")
+                            }
+                            REPLICA_COUNT = REPLICA_COUNT.toInteger()
+                            if(REPLICA_COUNT == 0){
+                                error("Replica Count must be greater than 0 for scaleup Activity !!")
+                            }
+                        }else {
+                            println "$REPLICA_COUNT Replica Count Parameter Not Required"
+                        }
+                    }
+
+                }
+            }
+        }
+        stage("Validating CodeOwner"){
+            steps{
+                script{
+                    if(ENV_ENVTYPE == "prod" || ENV_ENVTYPE == "stg" || ENV_ENVTYPE == "dr"){
+                        github_utils.validateCodeOwner()
+                        stage("Validate Branch Setting"){
+                            github_utils.validateRepoSetting()
+                        }
+                    }else if(ENV_ENVTYPE == "dev" || ENV_ENVTYPE == "sit" || ENV_ENVTYPE == "uat" || ENV_ENVTYPE == "pt" || ENV_ENVTYPE == "cte"){
+                        println "Code Owner Validation is not required for ${ENV_ENVTYPE} "
+                    }else{
+                        currentBuild.result = 'ABORTED'
+                        error("Probably wrong file used to start the Build !! Wrong Branch and entrypoint Combination")
+                    }
+                }
+            }
+        }
+
+
+
+        stage("Pod OR Namespace Restart in UAE") {
+            when {
+            expression { ENTITY_NAME == "uae" && ACTIVITY == "restart" }
+            }
+            parallel {
+            stage("Restart Pod or Namespace") {
+                agent {
+                label {
+                    label (ENV_ENVTYPE == "prod" || ENV_ENVTYPE == "dr" ? "maven-meydan-prod" : "maven4x-meydan")
+                }
+                }
+                steps {
+                script {
+                    if (POD_NAME == "") {
+                    def dcList = sh(
+                        script: "oc get dc --no-headers -n ${ENV_NAMESPACE}-${ENV_ENVTYPE} | awk '{print \$1}'",
+                        returnStdout: true
+                    ).trim().split('\n')
+                    echo "Restarting all pods in namespace ${ENV_NAMESPACE}-${ENV_ENVTYPE}"
+                    for (dep in dcList) {
+                        echo "Restarting $dep in ${ENV_NAMESPACE}-${ENV_ENVTYPE}"
+                        sh "oc rollout latest dc/$dep -n ${ENV_NAMESPACE}-${ENV_ENVTYPE}"
+                        sleep 2;
+                    }
+                    } else {
+                    sh "oc get pods -n ${ENV_NAMESPACE}-${ENV_ENVTYPE}"
+                    def POD_NAMES = ["${POD_NAME}"]
+                    POD_NAMES.each { POD_NAME ->
+                        echo "Rolling out the pod ${POD_NAME} in namespace ${ENV_NAMESPACE}-${ENV_ENVTYPE}"
+                        if (ENV_ENVTYPE == "prod" || ENV_ENVTYPE == "dr") {
+                        sh "oc rollout latest dc/${POD_NAME} -n ${ENV_NAMESPACE}"
+                        } else {
+                        sh "oc rollout latest dc/${POD_NAME} -n ${ENV_NAMESPACE}-${ENV_ENVTYPE}"
+                        }
+                        echo "Pod ${POD_NAME} deleted. Waiting for it to rollout..."
+                        sh "sleep 30"
+                        echo "Pod ${POD_NAME} should be rollout now."
+                    }
+                    }
+                }
+                }
+            }
+            }
+        }
+
+        stage("POD Scale Up/Down Activity in UAE") {
+            when {
+                expression { ENTITY_NAME == "uae" && (ACTIVITY == "scaleup" || ACTIVITY == "scaledown") }
+            }
+            parallel {
+                stage("Scale Up/Down Pods in UAE") {
+                    agent {
+                        label{
+                            label (ENV_ENVTYPE == "prod" || ENV_ENVTYPE == "dr" ? "maven-meydan-prod" : "maven4x-meydan")
+                        }
+                    }
+                    steps{
+                        script{
+                            if (ACTIVITY == 'scaleup') {
+                                echo "Scaling up the pod to ${REPLICA_COUNT}  replicas"
+                                if (ENV_ENVTYPE == "prod" || ENV_ENVTYPE == "dr") {
+                                    sh "oc scale dc ${POD_NAME} --replicas=${REPLICA_COUNT} -n ${ENV_NAMESPACE}"
+                                } else {
+                                    sh "oc scale dc ${POD_NAME} --replicas=${REPLICA_COUNT} -n ${ENV_NAMESPACE}-${ENV_ENVTYPE}"
+                                }
+                            } else if (ACTIVITY == 'scaledown')  {
+                                echo "Scaling down the pod to ${REPLICA_COUNT} replicas"
+                                if (ENV_ENVTYPE == "prod" || ENV_ENVTYPE == "dr") {
+                                    sh "oc scale dc ${POD_NAME} --replicas=${REPLICA_COUNT} -n ${ENV_NAMESPACE}"
+                                } else {
+                                    sh "oc scale dc ${POD_NAME} --replicas=${REPLICA_COUNT} -n ${ENV_NAMESPACE}-${ENV_ENVTYPE}"
+                                }
+                            } else {
+                                error "Invalid SCALE_ACTION: ${ACTIVITY}. Use 'scaleup' or 'scaledown'."
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        stage("Autoscale Pods in UAE") {
+            when {
+                expression { ENTITY_NAME == "uae" && ACTIVITY == "autoscale" }
+            }
+            agent {
+                label {
+                    label (ENV_ENVTYPE == "prod" || ENV_ENVTYPE == "dr" ? "maven-meydan-prod" : "maven4x-meydan")
+                }
+            }
+            steps {
+                script {
+                    echo "Enabling autoscaling for the pod"
+                    if (ENV_ENVTYPE == "prod" || ENV_ENVTYPE == "dr") {
+                        sh "oc autoscale dc ${POD_NAME} --min=${MIN_REPLICA} --max=${MAX_REPLICA} --cpu-percent=${CPU_PERCENT} -n ${ENV_NAMESPACE}"
+                        } else {
+                            sh "oc autoscale dc ${POD_NAME} --min=${MIN_REPLICA} --max=${MAX_REPLICA} --cpu-percent=${CPU_PERCENT} -n ${ENV_NAMESPACE}-${ENV_ENVTYPE}"
+                        }
+                }
+            }
+        }
+
+        stage("POD Restart in KSA") {
+            when {
+                expression { ENTITY_NAME == "ksa" && ACTIVITY == "restart" }
+            }
+            agent {
+                label {
+                   label (ENV_ENVTYPE == "prod" ? "mavenksaprod" : (ENV_ENVTYPE == "dr" ? "mavenksadr" : "mavenksameydandev"))
+                }
+            }
+            steps {
+                script {
+                    stage("Performing restart for $POD_NAME in $ENV_ENVTYPE for $ENV_NAMESPACE Namespace") {
+                        println "$ENV_ENVTYPE, restart"
+                        git branch: "master", credentialsId: 'git', url: "$GIT_SSH_URL:${OWNER_NAME}/${POD_NAME}.git"
+                        sh "pwd && ls -lart"
+                        try {
+                            sh "cd ksa && ls -lart"
+                            sh "cat $ENTITY_NAME/values-${ENV_ENVTYPE}.yaml"
+                            def data = readYaml file: "$ENTITY_NAME/values-${ENV_ENVTYPE}.yaml"
+
+                            if (ENV_ENVTYPE == "dev" || ENV_ENVTYPE == "sit") {
+                                if(ACTIVITY == "restart"){
+                                    config_map_utils.update_configmap(ENV_ENVTYPE)
+                                }
+                                }
+                            sh "cat $ENTITY_NAME/values-${ENV_ENVTYPE}.yaml"
+                            if (ENV_ENVTYPE == "prod" || ENV_ENVTYPE == "dr") {
+                                sh "git config --global user.email 'argogit70002@emiratesnbd.com' && git config --global user.name 'argogit70002' && git add --all . && git commit -m 'Performed the rollout Activity with $CR_NUMBER for $ENV_ENVTYPE' && git push origin master"
+                            } else {
+                                sh "git config --global user.email 'argogit70002@emiratesnbd.com' && git config --global user.name 'argogit70002' && git add --all . && git commit -m 'Performed the rollout Activity for $ENV_ENVTYPE' && git push origin master"
+                            }
+                        } catch (err) {
+                                println "Already performed rollout for $POD_NAME in $ENV_ENVTYPE for $ENV_NAMESPACE Namespace"
+                            }
+
+                    }
+                }
+            }
+        }
+
+    }
+}
