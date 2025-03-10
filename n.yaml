@@ -1,0 +1,45 @@
+node{
+   /* This Jenkinfile will be used for Scale UP, Scale DOWN and Restart Multiple Services ***/
+
+   /* Please Provide Namespace Name */
+
+
+    ENV_NAMESPACE = 'cibassistedxsharedservices'
+   
+
+  /* Please Provide multiple service names seperated by comma  */
+  
+
+
+  POD_NAME = 'cax-entitlement-service'
+
+
+
+  /* Please Provide Name of the Entity Name (uae or ksa)*/
+  ENTITY_NAME = 'uae'
+
+/* Please Provide the activity type, ACTIVITY should be scaledown or ScaleUp or Restart*/
+  
+   ACTIVITY = 'restart'
+
+/* Please Provide Replica Count in Case of Scaling UP/Down */
+
+  REPLICA_COUNT = '1'
+
+ /* Please Provide Minimum Replica, Maximum Replica and CPU Percentage in Case of AutoScaling  * */
+   
+   MIN_REPLICA = '1'
+   
+   MAX_REPLICA = '1'
+   
+   CPU_PERCENT = ''
+
+  /* Please Provide Environment (dev, sit, uat, pt)*/
+   
+   
+  ENV_ENVTYPE = 'dev'
+
+  checkout([$class: 'GitSCM', branches: [[name: '*/RestartServices']], userRemoteConfigs: [[credentialsId: 'git', url: 'git@github.emiratesnbd.com:Devops/PipelineAsCodeV4.git']]])
+
+  load 'vars/RestartService.groovy'
+}
