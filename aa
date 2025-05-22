@@ -26,5 +26,21 @@ CMD ["jmeter"]
 if ! whoami &>/dev/null; then
   echo "jmeteruser:x:$(id -u):0::/home/jmeteruser:/bin/bash" >> /etc/passwd
 fi
+FROM jmeter-custom:5.6.3
+
+# Create user jmeteruser with UID 1001 if not already created
+RUN id -u 1001 &>/dev/null || useradd -u 1001 -m -s /bin/bash jmeteruser
+
+# Copy local SSH files into the container
+COPY id_rsa /home/jmeteruser/.ssh/id_rsa
+COPY known_hosts /home/jmeteruser/.ssh/known_hosts
+
+# Set permissions and ownership
+RUN chmod 600 /home/jmeteruser/.ssh/id_rsa && \
+    chmod 644 /home/jmeteruser/.ssh/known_hosts && \
+    chown -R 1001:1001 /home/jmeteruser/.ssh
+
+USER 1001
+WORKDIR /home/jmeteruser
 
 exec "$@"
