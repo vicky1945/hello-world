@@ -1,0 +1,30 @@
+# Use your previously built JMeter image
+FROM custom-jmeter:latest
+
+# Create a writable home directory and adjust permissions
+RUN mkdir -p /home/jmeteruser && \
+    chown -R 1001:0 /home/jmeteruser /opt /jmeter && \
+    chmod -R g+rwX /home/jmeteruser /opt /jmeter
+
+# Add dynamic UID handling for clean shell prompt (fixes "I have no name!")
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+# Set working directory and switch to user 1001
+WORKDIR /home/jmeteruser
+USER 1001
+
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["jmeter"]
+
+
+
+
+#!/bin/bash
+
+# Add UID 1001 to /etc/passwd if not defined (fixes 'I have no name!')
+if ! whoami &>/dev/null; then
+  echo "jmeteruser:x:$(id -u):0::/home/jmeteruser:/bin/bash" >> /etc/passwd
+fi
+
+exec "$@"
